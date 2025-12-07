@@ -1,0 +1,63 @@
+[gcode_macro PRINT_START]
+gcode:
+    # 接收參數
+    {% set BED_TEMP = params.BED|default(60)|float %}
+    {% set EXTRUDER_TEMP = params.EXTRUDER|default(200)|float %}
+    {% set CHAMBER_TEMP = params.CHAMBER|default(0)|float %}
+    
+    # 1. 系統初始化
+    G90 ; 絕對座標
+    M83 ; 相對擠出
+    M117 Initializing...
+    BED_MESH_CLEAR ; 清除舊網床數據
+    
+    # 2. 開始加熱（兩階段加熱法）
+    # 先不等待地加熱床，並將噴頭預熱到 150 (Tap/Probe 安全溫度)
+    M140 S{BED_TEMP}
+    M104 S150 
+    
+    # 3. 歸位 (如果還沒歸位)
+    {% if "xyz" not in printer.toolhead.homed_axes %}
+        G28
+    {% endif %}
+
+    # 4. 絕對等待床溫 (關鍵修正：必須在 QGL 之前熱透)
+    M117 Heating bed to {BED_TEMP}C...
+    M190 S{BED_TEMP}
+    
+    # 5. 等待腔室 (如果有設定)
+    # 讓機器在熱平衡狀態下等待，避免長時間等待後幾何跑掉
+    #{% if CHAMBER_TEMP > 0 %}
+    #    M117 Heating chamber to {CHAMBER_TEMP}C...
+    #    # 這裡可以選擇把噴頭移到床中間開風扇輔助加熱
+    #    G0 X175 Y175 Z50 F3000 
+    #    M106 S255 ; 開風扇吹熱氣
+    #    TEMPERATURE_WAIT SENSOR="temperature_sensor chamber" MINIMUM={CHAMBER_TEMP}
+    #    M107 ; 關風扇
+    #{% endif %}
+    
+    # 6. 幾何校正 (在熱機狀態下執行)
+    M117 Leveling gantry (Hot)...
+    QUAD_GANTRY_LEVEL
+    G28 Z ; QGL 後必須重新歸位 Z
+    
+    # 7. 網床探測
+    M117 Calibrating bed mesh...
+    #BED_MESH_CALIBRATE ; 建議配置 Adaptive Mesh 以節省時間
+    BED_MESH_CALIBRATE ADAPTIVE=1 ADAPTIVE_MARGIN=10
+    
+    # 8. 加熱噴頭到列印溫度
+    # 移動到角落準備，避免漏料在打印區
+    G0 X50 Y15 Z20 F5000 
+    M117 Heating nozzle to {EXTRUDER_TEMP}C...
+    M109 S{EXTRUDER_TEMP}
+    
+    # 9. 清理噴嘴 (Prime Line)
+    M117 Purging nozzle...
+    G0 Z0.28 F600
+    G1 X200 E20 F1500 ; 增加擠出量確保擠出機壓力建立
+    G1 Y15.3 F5000
+    G1 X50 E20 F1200
+    G1 Z1 F600
+    
+    M117 Printing...
